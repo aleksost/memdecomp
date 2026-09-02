@@ -1,0 +1,21 @@
+[package]
+name = "memdecomp"
+version = "0.1.0"
+edition = "2021"
+description = "Recovers Xpress-compressed pages from Windows 8/10 page files and memory dumps (Linux-native rewrite of MemoryDecompression.exe)"
+license = "GPL-3.0-or-later"
+
+[[bin]]
+name = "memdecomp"
+path = "src/main.rs"
+
+[dependencies]
+memmap2 = "0.9"
+rayon = "1.10"
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
