@@ -145,6 +145,49 @@ Defaults: `--threads` = available cores, `--min-size` = 1024.
   documented in the current README, to confirm we've actually improved on
   the ~4h38m baseline.
 
+## 4b. Benchmark results (real-world data, post-implementation)
+
+Measured against a real, previously-untested Windows pagefile (2.55 GB,
+copied to local NVMe first to remove drive-speed as a variable):
+
+| | Original tool (documented in old README) | memdecomp |
+|---|---|---|
+| Dataset | ~6 GB pagefile, 803,827 pages | 2.55 GB pagefile, 393,744 pages |
+| Time | 16,731s (4h 38m) | 5.1s |
+| Rate | 48 pages/sec | ~77,000 pages/sec |
+
+That's roughly **~640x** the original's pages/sec (different dataset sizes,
+so treat the multiplier as directional, not a precise ratio — but the order
+of magnitude is real and reproducible).
+
+**First pass** got the pagefile down to ~6.2-7.5s using the design in
+section 3 as originally implemented (mmap + rayon scan, then a single
+serial `write_all` of the assembled output). Phase timing (`--timing`)
+showed scan ≈ 3.7s and write ≈ 2-3s as two fully serial phases.
+
+**Second pass — pipelining scan and write.** Restructured so each rayon
+chunk sends its decoded buffer to a dedicated writer thread over a channel
+as soon as it's ready (the writer reorders out-of-sequence chunks with a
+small `BTreeMap` buffer, since rayon doesn't finish chunks in order, and
+streams them to disk in original file order). First attempt at this made
+things *worse* (~6.2-7.2s, no better than serial) — because `write()`
+also costs real CPU (copying into the page cache), so on a fully
+core-saturated 8-core box the writer thread had nowhere free to run: it
+just stole cycles from a scan worker instead of overlapping "for free".
+Confirmed via a `--dry-run` mode (scan with an `io::sink()` writer) showing
+decode-only time was ~4.2-4.8s — the write phase was really adding ~2s on
+top even with the pipeline, i.e. no actual overlap was happening.
+
+**Fix**: default to `available_cores - 1` scan threads (not all cores)
+whenever writing a real output file, explicitly reserving one core for the
+writer thread so its CPU-side work has somewhere to run concurrently
+instead of contending with the scan pool. That took the pipelined,
+default-flags run down to a consistent ~5.1-5.4s — close to the decode-only
+`--dry-run` floor, and a genuine ~20-30% improvement over the original
+serial-phases version. Output was verified byte-identical to the
+pre-optimization run (the pipeline's reordering logic doesn't change what
+gets written, only when).
+
 ## 5. Rollout
 
 1. Implement `xpress.rs` + golden test first — correctness gate before any

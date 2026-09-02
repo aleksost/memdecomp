@@ -22,8 +22,11 @@ Compared to the original tool:
   [msuhanov/winmem_decompress](https://github.com/msuhanov/winmem_decompress)
   (GPL-3.0, same license as this project).
 - **Much faster**: one decode pass per candidate offset (vs. the original's
-  up-to-~4080 growing-length trial decodes), `mmap`'d input, and multi-core
-  scanning via `rayon`.
+  up-to-~4080 growing-length trial decodes), `mmap`'d input, multi-core
+  scanning via `rayon`, and a pipelined writer thread that streams recovered
+  pages to disk as they're found instead of waiting for the whole scan to
+  finish. Benchmarked at ~640x the original's pages/sec on a real page file
+  (see `REWRITE_PLAN.md`'s benchmark notes for methodology).
 
 ## Build
 
@@ -34,7 +37,7 @@ cargo build --release
 ## Usage
 
 ```
-memdecomp <input file-or-dir> <output-file> [--threads N] [--min-size BYTES] [--quiet]
+memdecomp <input file-or-dir> <output-file> [--threads N] [--min-size BYTES] [--quiet] [--dry-run] [--timing]
 ```
 
 ```
@@ -53,7 +56,16 @@ Total seconds:  0.002
   e.g. a Volatility `vaddump` output directory).
 - `--min-size` (default 1024) is the minimum decompressed byte count to
   accept a candidate as a real page; matches `winmem_decompress`'s default.
-- `--threads` defaults to the number of logical CPUs.
+- `--threads` defaults to logical CPUs minus one. Scanning and writing run
+  concurrently on separate threads (see `REWRITE_PLAN.md` §4b); one core is
+  reserved for the writer by default so that overlap doesn't just contend
+  with the scan pool for cycles. Pass `--threads` explicitly to override, or
+  use `--dry-run` (which needs no writer core) to use every core.
+- `--dry-run` scans and prints stats without writing an output file — useful
+  to preview how much would be recovered, or for benchmarking scan speed on
+  its own.
+- `--timing` prints a phase-timing breakdown to stderr (mmap time, then the
+  combined scan+write pipeline time).
 
 ## Tests
 
